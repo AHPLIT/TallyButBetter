@@ -1,46 +1,56 @@
-// routes/tally.js
 const express = require("express");
+const sqlite3 = require("sqlite3").verbose();
+const path = require("path");
+
 const router = express.Router();
-const db = require("../db");
-const { Parser } = require("json2csv");
+const db = new sqlite3.Database(path.join(__dirname, "../tally.db"));
 
-// POST /api/submit - Save a new tally entry
-router.post("/submit", (req, res) => {
+// Create the table if it doesn't exist
+db.run(`
+  CREATE TABLE IF NOT EXISTS tally (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    department TEXT NOT NULL,
+    qType TEXT NOT NULL,
+    referral INTEGER,
+    notes TEXT,
+    timestamp TEXT NOT NULL
+  )
+`);
+
+router.post("/", (req, res) => {
   const { department, qType, referral, notes, timestamp } = req.body;
+  const query = `
+    INSERT INTO tally (department, qType, referral, notes, timestamp)
+    VALUES (?, ?, ?, ?, ?)
+  `;
 
-  db.run(
-    `INSERT INTO queries (department, q_type, referral, notes, timestamp)
-     VALUES (?, ?, ?, ?, ?)`,
-    [department, qType, referral ? 1 : 0, notes, timestamp],
-    function (err) {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-      res.json({ success: true, id: this.lastID });
-    }
-  );
-});
-
-// GET /api/report - Retrieve all tally entries
-router.get("/report", (req, res) => {
-  db.all(`SELECT * FROM queries ORDER BY timestamp DESC`, [], (err, rows) => {
+  db.run(query, [department, qType, referral ? 1 : 0, notes, timestamp], function (err) {
     if (err) {
-      return res.status(500).json({ error: err.message });
+      console.error(err);
+      return res.status(500).json({ error: "Failed to insert tally" });
     }
-    res.json(rows);
+    res.json({ success: true, id: this.lastID });
   });
 });
 
-// GET /api/export - Export all entries as CSV
-router.get("/export", (req, res) => {
-  db.all(`SELECT * FROM queries ORDER BY timestamp DESC`, [], (err, rows) => {
-    if (err) return res.status(500).send(err.message);
+// GET tallies with optional filtering
+router.get("/", (req, res) => {
+  const { start, end, department } = req.query;
+  let query = `SELECT * FROM tally WHERE DATE(timestamp) BETWEEN ? AND ?`;
+  const params = [start, end];
 
-    const parser = new Parser();
-    const csv = parser.parse(rows);
-    res.header("Content-Type", "text/csv");
-    res.attachment("tally_report.csv");
-    res.send(csv);
+  if (department && department !== "All") {
+  query += ` AND LOWER(department) = LOWER(?)`;
+  params.push(department);
+  }
+
+  db.all(query, params, (err, rows) => {
+    if (err) {
+      console.error("Error fetching data:", err);
+      res.status(500).json({ error: "Failed to fetch data" });
+    } else {
+      res.json(rows);
+    }
   });
 });
 
